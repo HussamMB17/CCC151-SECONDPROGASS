@@ -3,10 +3,19 @@ from PyQt5.QtCore import pyqtSignal, QObject, Qt
 from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import QAbstractItemView
 from PyQt5.QtCore import Qt
+from PyQt5 import QtWidgets 
 import csv
 import re
 from dialogs import AddStudentDialog, UpdateStudentDialog, AddCourseDialog, UpdateCourseDialog
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QTableWidget, QAbstractItemView, QLineEdit, QComboBox, QMessageBox, QToolBar, QStatusBar
+)
+from PyQt5.QtGui import QIcon, QFont
+from PyQt5.QtCore import Qt, pyqtSignal
 import mysql.connector
+
+
 
 # Database connection parameters
 HOST = 'localhost'
@@ -21,6 +30,7 @@ try:
         user=USER,
         password=PASSWORD,
         database=DATABASE
+        
     )
 
     # Create cursor
@@ -133,12 +143,85 @@ class StudentManagementApp(QMainWindow):
         self.layout.addLayout(search_layout)
 
         # Connect signal to slot
-        self.signal.course_added.connect(self.load_course_data)
+        self.signal.course_added.connect(self.load_course_data)  # Connect signal to reload course data
 
         # Initially hide the course management buttons
         if hasattr(self, 'student_table'):
             self.hide_course_table_buttons(True)
+        
+        # Apply styles
+        self.apply_styles()
+    def apply_styles(self):
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #f0f0f0;
+            }
+        QPushButton {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            font-size: 14px;
+            margin: 1px;
+            border-radius: 12px;
+            min-width: 80px; /* Ensures button width adjusts to text */
+            min-height: 15px; /* Ensures enough height for the text */
+            font-family: Arial, sans-serif; /* Consistent font */
+        }
+        QPushButton:hover {
+            background-color: #45a049;
+        }
+        QPushButton:pressed {
+            background-color: #3e8e41; /* Darker shade when pressed */
+        }
+            QLineEdit, QComboBox {
+                padding: 10px;
+                margin: 10px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+            }
+            QTableWidget {
+                background-color: white;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 14px;
+            }
+            QHeaderView::section {
+                background-color: #ddd;
+                padding: 8px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+            }
+        """)
 
+
+    def create_connection(self):
+        try:
+            connection = mysql.connector.connect(
+                host=HOST,
+                user=USER,
+                password=PASSWORD,
+                database=DATABASE
+            )
+            if connection.is_connected():
+                return connection
+        except Exception as e:
+            print(f"Error: {e}")
+        return None
+    
+    def reconnect(self):
+        self.connection = self.create_connection()
+        if self.connection:
+            self.cursor = self.connection.cursor()
+
+    def closeEvent(self, event):
+        """Override close event to ensure proper closing of database connection."""
+        if self.cursor:
+            self.cursor.close()
+        if self.connection:
+            self.connection.close()
+        event.accept()
+        
     def search_courses(self):
         """Search for courses based on the selected criteria."""
         query = self.search_line_edit.text().strip().lower()
@@ -152,16 +235,21 @@ class StudentManagementApp(QMainWindow):
         sql_query = ""
 
         if criteria == 'Course Code':
-            sql_query = "SELECT * FROM courses WHERE course_code LIKE %s"
+            sql_query = "SELECT * FROM courses WHERE LOWER(course_code) LIKE %s"
         elif criteria == 'Course Name':
-            sql_query = "SELECT * FROM courses WHERE course_name LIKE %s"
+            sql_query = "SELECT * FROM courses WHERE LOWER(course_name) LIKE %s"
 
-        cursor.execute(sql_query, ('%' + query + '%',))
-        for row in cursor.fetchall():
-            filtered_courses.append(row)
-
-        self.populate_course_table(filtered_courses)  # Update table with filtered results
-
+        try:
+            self.cursor.execute(sql_query, ('%' + query + '%',))
+            filtered_courses = self.cursor.fetchall()
+            
+            if not filtered_courses:
+                QMessageBox.information(self, "No Results", "No courses found matching the search criteria.")
+            else:
+                self.populate_course_table(filtered_courses)  # Update table with filtered results
+        except mysql.connector.Error as e:
+            # Show error message in the UI
+            QMessageBox.critical(self, "Error", "An error occurred while searching courses: " + str(e))
 
     def search_students(self):
         """Search for students based on the selected criteria."""
@@ -172,7 +260,6 @@ class StudentManagementApp(QMainWindow):
             self.load_student_data()  # Reload all student data if query is empty
             return
 
-        filtered_students = []
         sql_query = ""
 
         if criteria == 'First Name':
@@ -186,24 +273,41 @@ class StudentManagementApp(QMainWindow):
         elif criteria == 'Year Level':
             sql_query = "SELECT * FROM students WHERE year_level LIKE %s"
         elif criteria == 'Gender':
-            # Special case for gender search
-            if query in ['M', 'MALE']:
-                gender_query = 'Male'
-            elif query in ['F', 'FEMALE']:
-                gender_query = 'Female'
-            else:
-                gender_query = query  # Assume it's already Male or Female
+            gender_query = 'Male' if query in ['M', 'MALE'] else 'Female' if query in ['F', 'FEMALE'] else query
             sql_query = "SELECT * FROM students WHERE gender = %s"
 
-        if criteria != 'Gender':
-            wildcard_query = f"%{query}%"
-            cursor.execute(sql_query, (wildcard_query,))
-        else:
-            cursor.execute(sql_query, (gender_query,))  # For gender search, use the mapped value
+        try:
+            if criteria != 'Gender':
+                wildcard_query = f"%{query}%"
+                self.cursor.execute(sql_query, (wildcard_query,))
+            else:
+                self.cursor.execute(sql_query, (gender_query,))  # For gender search, use the mapped value
 
-        rows = cursor.fetchall()
+            rows = self.cursor.fetchall()
 
-        self.populate_student_table(rows)  # Update table with filtered results
+            if not rows:
+                QMessageBox.information(self, "No Results", "No students found matching the search criteria.")
+
+            self.populate_student_table(rows)  # Update table with filtered results
+
+        except mysql.connector.errors.ProgrammingError as e:
+            if e.errno == 2055:  # Cursor is not connected
+                self.reconnect()
+                if criteria != 'Gender':
+                    wildcard_query = f"%{query}%"
+                    self.cursor.execute(sql_query, (wildcard_query,))
+                else:
+                    self.cursor.execute(sql_query, (gender_query,))  # For gender search, use the mapped value
+
+                rows = self.cursor.fetchall()
+
+                if not rows:
+                    QMessageBox.information(self, "No Results", "No students found matching the search criteria.")
+                else:
+                    self.populate_student_table(rows)  # Update table with filtered results
+            else:
+                raise
+
 
     def matches_search_criteria(self, student_data, criteria, query):
         """Check if a student matches the search criteria."""
@@ -230,7 +334,6 @@ class StudentManagementApp(QMainWindow):
         return fields.index(criteria)
 
     def populate_student_table(self, students_data):
-        """Populate the student table with data including the 'Status' column."""
         self.student_table.clear()  # Clear existing data
         num_columns = len(STUDENT_FIELDS) + 3  # Additional columns for 'Status', 'Update', and 'Delete'
         self.student_table.setColumnCount(num_columns)
@@ -245,8 +348,8 @@ class StudentManagementApp(QMainWindow):
                 self.student_table.setItem(i, j, item)
 
             # Compute status based on course code (index 6 is the course code column)
-            course_code = row_data[6].strip().lower()
-            if course_code != "none":
+            course_code = row_data[6]
+            if course_code is not None and course_code.strip().lower() != "none":
                 status = "Enrolled"
             else:
                 status = "Unenrolled"
@@ -267,6 +370,7 @@ class StudentManagementApp(QMainWindow):
 
         # Hide update and delete buttons for course entries
         self.update_delete_buttons_visibility(False)
+
         
     def update_delete_buttons_visibility(self, course_view):
         """Hide or show the update and delete buttons based on the view."""
@@ -288,12 +392,21 @@ class StudentManagementApp(QMainWindow):
                     if delete_button:
                         delete_button.setVisible(False)
 
+
     def load_student_data(self):
         """Load student data into the table with 'Status' column."""
-        cursor.execute("SELECT first_name, middle_initial, last_name, id_value, year_level, gender, course_code FROM students")
-        data = cursor.fetchall()
-        students_data = self.compute_student_status(data, self.course_data)
-        self.populate_student_table(students_data)
+        try:
+            if self.connection is None or not self.connection.is_connected():
+                self.reconnect()
+
+            with self.connection.cursor() as cursor:
+                cursor.execute("SELECT first_name, middle_initial, last_name, id_value, year_level, gender, course_code FROM students")
+                data = cursor.fetchall()
+                students_data = self.compute_student_status(data, self.course_data)
+                self.populate_student_table(students_data)
+        except mysql.connector.Error as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to load student data: {str(e)}")
+
 
 
     def compute_student_status(self, data, course_data):
@@ -303,7 +416,7 @@ class StudentManagementApp(QMainWindow):
         for row in data:
             if len(row) >= 7:
                 first_name, middle_initial, last_name, id_value, year_level, gender, course_code = row
-                if course_code.strip().lower() != "none":
+                if course_code is not None and course_code.strip().lower() != "none":
                     status = "Enrolled"
                 else:
                     status = "Unenrolled"
@@ -353,7 +466,8 @@ class StudentManagementApp(QMainWindow):
 
         # Resize columns to fit content
         self.resize_columns_to_fit()
-        
+
+
     def toggle_data(self, checked):
         """Toggle between student data and course data."""
         if checked:
@@ -367,7 +481,7 @@ class StudentManagementApp(QMainWindow):
                 self.hide_course_table_buttons(False)  # Show course table buttons
 
                 # Ensure course table is populated and visible
-                self.populate_course_table(self.course_data)
+                self.load_course_data()  # Load data when switching to course view
                 self.student_table.show()
                 self.student_table.setVisible(True)
 
@@ -391,6 +505,8 @@ class StudentManagementApp(QMainWindow):
             self.search_criteria_combo.addItems(STUDENT_FIELDS)
             self.search_button.clicked.disconnect(self.search_courses)
             self.search_button.clicked.connect(self.search_students)
+
+
 
     def resize_columns_to_fit(self):
         """Resize each column in the table to fit its content."""
@@ -422,78 +538,157 @@ class StudentManagementApp(QMainWindow):
 
     def load_course_data(self):
         """Retrieve course data from the MySQL database."""
-        self.course_data = get_course_data(cursor)
+        try:
+            if self.connection is None or not self.connection.is_connected():
+                self.reconnect()
+
+            with self.connection.cursor() as cursor:
+                cursor.execute("SELECT course_code, course_name FROM courses")
+                self.course_data = cursor.fetchall()
+                self.populate_course_table(self.course_data)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to load course data: {str(e)}")
+
 
     def add_student_dialog(self):
         """Open dialog to add a new student."""
-        dialog = AddStudentDialog(self, self.course_data)
+        dialog = AddStudentDialog(parent=self, course_data=self.course_data, connection=self.connection)
         if dialog.exec_():
-            # Get student data from the dialog
             student_data = dialog.get_student_data()
-
-            # Insert student data into the database
-            self.cursor.execute("""
-                INSERT INTO students (first_name, middle_initial, last_name, id_value, year_level, gender, course_code)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, student_data)
-            self.connection.commit()
-
-            # Reload student data into the table
-            self.load_student_data()
+            if self.confirm_action("Add Student"):
+                try:
+                    # Reconnect if necessary
+                    self.connection.ping(reconnect=True)
+                    # Insert student data into the database
+                    self.cursor.execute("""
+                        INSERT INTO students (first_name, middle_initial, last_name, id_value, year_level, gender, course_code)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, student_data)
+                    self.connection.commit()
+                    # Reload student data into the table
+                    self.load_student_data()
+                except Exception as e:
+                    QtWidgets.QMessageBox.critical(self, "Error", f"Failed to add student: {str(e)}")
 
     def add_course_dialog(self):
         """Open dialog to add a new course."""
-        dialog = AddCourseDialog(self)
+        if self.connection is None or not self.connection.is_connected():
+            self.reconnect()
+        dialog = AddCourseDialog(parent=self, connection=self.connection)
         if dialog.exec_():
-            # Get course data from the dialog
             course_data = dialog.get_course_data()
+            try:
+                # Reconnect if necessary
+                self.connection.ping(reconnect=True)
+                self.cursor = self.connection.cursor()  # Ensure cursor is re-created after reconnecting
+                # Insert course data into the database
+                self.cursor.execute("""
+                    INSERT INTO courses (course_code, course_name)
+                    VALUES (%s, %s)
+                """, course_data)
+                self.connection.commit()
+                # Reload course data into the table
+                self.load_course_data()
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(self, "Error", f"Failed to add course: {str(e)}")
 
-            # Insert course data into the database
-            self.cursor.execute("""
-                INSERT INTO courses (course_code, course_name)
-                VALUES (%s, %s)
-            """, course_data)
-            self.connection.commit()
-
-            # Reload course data into the table
-            self.load_course_data()
 
     def update_course_dialog(self, row):
         """Open dialog to update course information."""
-        dialog = UpdateCourseDialog(self, row)
+        if self.connection is None or not self.connection.is_connected():
+            self.reconnect()
+
+        dialog = UpdateCourseDialog(parent=self, row=row, connection=self.connection)
         if dialog.exec_():
-            # Get updated course data from the dialog
             updated_course_data = dialog.get_updated_course_data()
+            old_course_code = self.course_data[row][0]
+            new_course_code = updated_course_data[0]
+            new_course_name = updated_course_data[1]
 
-            # Update course data in the database
-            self.db_cursor.execute("""
-                UPDATE courses
-                SET course_code = %s, course_name = %s
-                WHERE course_code = %s
-            """, updated_course_data + (self.course_data[row][0],))
-            self.connection.commit()
+            try:
+                with self.connection.cursor() as cursor:
+                    # Check if the new course code already exists in the courses table
+                    cursor.execute("SELECT * FROM courses WHERE course_code = %s", (new_course_code,))
+                    if cursor.fetchone():
+                        raise ValueError(f"Course code '{new_course_code}' already exists in the courses table.")
 
-            # Reload course data into the table
-            self.load_course_data()
+                    # Check if there's an ongoing transaction
+                    cursor.execute("SELECT @@autocommit")
+                    autocommit_status = cursor.fetchone()[0]
+                    if autocommit_status == 1:
+                        # Start a transaction only if not in autocommit mode
+                        self.connection.start_transaction()
+
+                    # Update course code and course name in the courses table first
+                    cursor.execute("""
+                        UPDATE courses
+                        SET course_code = %s, course_name = %s
+                        WHERE course_code = %s
+                    """, (new_course_code, new_course_name, old_course_code))
+                    print(f"Updated courses table with new course_code {new_course_code} and new course_name {new_course_name}.")
+
+                    # Update course code in the students table
+                    cursor.execute("""
+                        UPDATE students
+                        SET course_code = %s
+                        WHERE course_code = %s
+                    """, (new_course_code, old_course_code))
+                    print(f"Updated students table with new course_code {new_course_code}.")
+
+                    # Commit the transaction if it was started in this block
+                    if autocommit_status == 1:
+                        self.connection.commit()
+                        print("Transaction committed.")
+
+                    self.load_course_data()
+                    QtWidgets.QMessageBox.information(self, "Success", "Course updated successfully.")
+            except mysql.connector.Error as e:
+                self.connection.rollback()
+                QtWidgets.QMessageBox.critical(self, "Error", f"Failed to update course: {str(e)}")
+                print(f"Error: {str(e)}")
+            except ValueError as ve:
+                self.connection.rollback()
+                QtWidgets.QMessageBox.warning(self, "Warning", str(ve))
+                print(f"Warning: {str(ve)}")
+            except Exception as ex:
+                self.connection.rollback()
+                QtWidgets.QMessageBox.critical(self, "Error", f"An unexpected error occurred: {str(ex)}")
+                print(f"Unexpected Error: {str(ex)}")
+            finally:
+                cursor.close()
+
 
     def update_student_dialog(self, row):
         """Open dialog to update student information."""
-        dialog = UpdateStudentDialog(self, row, self.course_data)
+        dialog = UpdateStudentDialog(parent=self, row=row, course_data=self.course_data, connection=self.connection)
         if dialog.exec_():
-            # Get updated student data from the dialog
             updated_student_data = dialog.get_updated_student_data()
+            try:
+                # Reconnect if necessary
+                self.connection.ping(reconnect=True)
+                # Update student data in the database
+                self.cursor.execute("""
+                    UPDATE students
+                    SET first_name = %s, middle_initial = %s, last_name = %s, id_value = %s,
+                        year_level = %s, gender = %s, course_code = %s
+                    WHERE id_value = %s
+                """, updated_student_data + (self.student_table.item(row, 3).text(),))
+                self.connection.commit()
+                # Reload student data into the table
+                self.load_student_data()
+                # Show confirmation pop-up
+                QtWidgets.QMessageBox.information(self, "Success", "Student updated successfully!")
+            except mysql.connector.Error as e:
+                if e.errno in (mysql.connector.errorcode.ER_ROW_IS_REFERENCED_2, mysql.connector.errorcode.ER_NO_REFERENCED_ROW_2):
+                    # Suppress specific foreign key constraint error message
+                    print("Suppressed error message: Foreign key constraint issue.")
+                else:
+                    QtWidgets.QMessageBox.critical(self, "Error", f"Failed to update student: {str(e)}")
 
-            # Update student data in the database
-            self.cursor.execute("""
-                UPDATE students
-                SET first_name = %s, middle_initial = %s, last_name = %s,
-                    id_value = %s, year_level = %s, gender = %s, course_code = %s
-                WHERE id_value = %s
-            """, updated_student_data + (self.student_table.item(row, 3).text(),))
-            self.connection.commit()
-
-            # Reload student data into the table
-            self.load_student_data()
+    def confirm_action(self, action_name):
+        """Confirm an action before proceeding."""
+        self.load_student_data()  # Reload student data after adding a student
+        return False
 
     def confirm_delete_student(self, row):
         """Confirm deletion of a student."""
@@ -504,9 +699,18 @@ class StudentManagementApp(QMainWindow):
     def delete_student(self, row):
         """Delete a student from the database."""
         student_id = self.student_table.item(row, 3).text()  # Assuming ID is in the 4th column
-        cursor.execute("DELETE FROM students WHERE id_value = %s", (student_id,))
-        connection.commit()  # Commit the transaction
-        self.load_student_data()  # Reload student data
+
+        try:
+            connection = self.connection
+            cursor = connection.cursor()
+            cursor.execute("DELETE FROM students WHERE id_value = %s", (student_id,))
+            connection.commit()  # Commit the transaction
+            self.load_student_data()  # Reload student data
+            QMessageBox.information(self, "Success", "Student successfully deleted.")
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to delete student: {str(e)}")
+        finally:
+            cursor.close()  # Close the cursor
 
     def confirm_delete_course(self, row):
         """Confirm deletion of a course."""
@@ -516,10 +720,31 @@ class StudentManagementApp(QMainWindow):
 
     def delete_course(self, row):
         """Delete a course from the database."""
-        course_code = self.student_table.item(row, 0).text()  # Assuming Course Code is in the 1st column
-        cursor.execute("DELETE FROM courses WHERE course_code = %s", (course_code,))
-        connection.commit()  # Commit the transaction
-        self.load_course_data()  # Reload course data
+        try:
+            course_code = self.course_data[row][0]  # Assuming Course Code is in the 1st column
+            self.connection.ping(reconnect=True)
+
+            with self.connection.cursor() as cursor:
+                # Update the course_code in students table to NULL for the course being deleted
+                cursor.execute("UPDATE students SET course_code = NULL WHERE course_code = %s", (course_code,))
+
+                # Delete the course from courses table
+                cursor.execute("DELETE FROM courses WHERE course_code = %s", (course_code,))
+
+            # Commit the transaction
+            self.connection.commit()
+
+            # Reload course data to reflect the deletion
+            self.load_course_data()
+
+            # Refresh student data in the background without switching view
+            #self.load_student_data()
+
+            QMessageBox.information(self, "Success", "Course successfully deleted.")
+        except Exception as e:
+            self.connection.rollback()  # Rollback the transaction in case of error
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to delete course: {str(e)}")
+
 
 def main():
     app = QApplication([])

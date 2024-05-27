@@ -9,39 +9,21 @@ import csv
 import re
 import mysql.connector
 from mysql.connector import Error
-
-# MySQL database credentials
-HOST = 'localhost'
-USER = 'root'
-PASSWORD = '7h!ns=cY96NF'
-DATABASE = 'ssis'
+import mysql.connector
+from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox
+from PyQt5 import QtWidgets
 
 STUDENT_FIELDS = ['Name', 'ID', 'Year Level', 'Gender', 'Course Code', 'Course Name']
 COURSE_FIELDS = ['Course Code', 'Course Name']
 
-def create_connection(host, user, password, database):
-    """Create a connection to the MySQL database."""
-    try:
-        connection = mysql.connector.connect(
-            host=host,
-            user=user,
-            password=password,
-            database=database
-        )
-        if connection.is_connected():
-            print("Connected to MySQL database")
-            return connection
-    except Error as e:
-        print(f"Error connecting to MySQL database: {e}")
-        return None
-
 class AddStudentDialog(QDialog):
-    def __init__(self, parent=None, course_data=None):
+    def __init__(self, parent=None, course_data=None, connection=None):
         super().__init__(parent)
         self.setWindowTitle("Add Student")
         self.setGeometry(200, 200, 400, 350)
-
+        self.connection = connection
         self.course_data = course_data
+        self.cursor = connection.cursor()  # Initialize cursor
         self.original_scroll_position = None  # Variable to store the scroll position
 
         layout = QVBoxLayout(self)
@@ -106,10 +88,10 @@ class AddStudentDialog(QDialog):
                 return
 
             # Establish connection to the MySQL database
-            connection = create_connection(HOST, USER, PASSWORD, DATABASE)
+            connection = self.connection
             if connection:
                 try:
-                    cursor = connection.cursor()
+                    cursor = self.cursor  # Use the initialized cursor
                     # Insert student data into the database
                     insert_query = """
                         INSERT INTO students (first_name, middle_initial, last_name, id_value, year_level, gender, course_code)
@@ -130,7 +112,7 @@ class AddStudentDialog(QDialog):
         else:
             QMessageBox.warning(self, "Error", "Please enter valid data.")
 
-    def validate_student_data(self, student_data):
+    def validate_student_data(self, student_data,):
         """Validate student data."""
         first_name, middle_initial, last_name, id_value, year_level, gender, course_code = student_data
 
@@ -167,23 +149,25 @@ class AddStudentDialog(QDialog):
     def is_duplicate_id(self, id_value):
         """Check if the ID already exists in the student database."""
         try:
-            connection = create_connection(HOST, USER, PASSWORD, DATABASE)
+            connection = self.connection
             if connection:
-                cursor = connection.cursor()
-                # Execute a SELECT query to check for the existence of the ID
-                select_query = "SELECT id_value FROM students WHERE id_value = %s"
-                cursor.execute(select_query, (id_value,))
-                result = cursor.fetchone()
-                if result:
-                    return True  # ID already exists
+                cursor = connection.cursor()  # Open a new cursor
+                try:
+                    # Execute a SELECT query to check for the existence of the ID
+                    select_query = "SELECT id_value FROM students WHERE id_value = %s"
+                    cursor.execute(select_query, (id_value,))
+                    result = cursor.fetchone()
+                    if result:
+                        return True  # ID already exists
+                except Error as e:
+                    print(f"Error checking for duplicate ID: {e}")
+                finally:
+                    cursor.close()  # Close the cursor
         except Error as e:
-            print(f"Error checking for duplicate ID: {e}")
-        finally:
-            if connection and connection.is_connected():
-                cursor.close()
-                connection.close()
+            print(f"Error connecting to database: {e}")
         return False  # ID does not exist or an error occurred
-    
+
+
     def get_student_data(self):
         """Get student data from the dialog."""
         first_name = self.first_name_edit.text()
@@ -198,18 +182,22 @@ class AddStudentDialog(QDialog):
 
 
 class AddCourseDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, connection=None):
         super().__init__(parent)
         self.setWindowTitle("Add Course")
         self.setGeometry(200, 200, 400, 200)
+        self.connection = connection  # Initialize connection
+        self.cursor = connection.cursor()  # Initialize cursor
 
         layout = QVBoxLayout()
         self.setLayout(layout)
 
+        COURSE_FIELDS = [("Course Code (Ex. BSCE/BSEDMATH)", "All caps lock"), ("Course Name (Ex. BS Civil Engineering/ BSED Mathematics)", "Example")]
         self.fields = []
-        for field in COURSE_FIELDS:
+        for field, example in COURSE_FIELDS:
             label = QLabel(field)
             edit = QLineEdit()
+            label.setToolTip(f"Example: {example}")
             layout.addWidget(label)
             layout.addWidget(edit)
             self.fields.append(edit)
@@ -225,9 +213,9 @@ class AddCourseDialog(QDialog):
         # Validate course data
         if self.validate_course_data(course_data):
             try:
-                connection = create_connection(HOST, USER, PASSWORD, DATABASE)
+                connection = self.connection
                 if connection:
-                    cursor = connection.cursor()
+                    cursor = self.cursor  # Use the initialized cursor
                     # Insert course data into the database
                     insert_query = """
                         INSERT INTO courses (course_code, course_name)
@@ -251,23 +239,24 @@ class AddCourseDialog(QDialog):
 
     def validate_course_data(self, course_data):
         """Validate course data."""
-        # You can add your validation logic here
-        return True
+        if course_data[0].isupper() and course_data[1].strip():  # Check if course code is all caps lock and course name is not empty
+            # You can add additional validation logic here
+            return True
+        return False
 
 
 class UpdateStudentDialog(QDialog):
-    def __init__(self, parent=None, row=None, course_data=None):
+    def __init__(self, parent=None, row=None, course_data=None, connection=None):
         super().__init__(parent)
         self.setWindowTitle("Update Student")
         self.setGeometry(200, 200, 400, 350)
-
+        self.connection = connection
+        self.cursor = connection.cursor()
         self.row = row
         self.course_data = course_data
-        self.original_scroll_position = None  # Variable to store the scroll position
 
         layout = QVBoxLayout(self)
 
-        # Add fields for ID, first name, middle initial, last name
         self.first_name_edit = QLineEdit()
         self.middle_initial_edit = QLineEdit()
         self.last_name_edit = QLineEdit()
@@ -282,19 +271,18 @@ class UpdateStudentDialog(QDialog):
         layout.addWidget(QLabel("ID:"))
         layout.addWidget(self.id_edit)
 
-        # Add existing student fields (Year Level, Gender, Course)
         self.fields = []
         for field in ["Year Level", "Gender", "Course Code"]:
             label = QLabel(field)
             combo_box = QComboBox()
             if field == "Year Level":
-                combo_box.addItems(['1', '2', '3', '4'])  # Restrict options to 1, 2, 3, 4
+                combo_box.addItems(['1', '2', '3', '4'])
             elif field == "Gender":
-                combo_box.addItems(['Male', 'Female'])  # Restrict options to Male and Female
+                combo_box.addItems(['Male', 'Female'])
             elif field == "Course Code":
                 combo_box.addItem('None')
                 for course_code in self.course_data:
-                    combo_box.addItem(course_code[0])  # Add course name
+                    combo_box.addItem(course_code[0])
             layout.addWidget(label)
             layout.addWidget(combo_box)
             self.fields.append(combo_box)
@@ -303,72 +291,40 @@ class UpdateStudentDialog(QDialog):
         self.submit_button.clicked.connect(self.submit_data)
         layout.addWidget(self.submit_button)
 
-        # Pre-fill the dialog with existing student data
         self.populate_fields()
 
-        # Capture the current scroll position before showing the dialog
-        if parent and hasattr(parent, 'student_table'):
-            self.original_scroll_position = parent.student_table.verticalScrollBar().value()
-
     def populate_fields(self):
-        """Populate dialog fields with existing student data."""
         if self.row is not None:
-            # Get data from the main window's student table
-            first_name = self.parent().student_table.item(self.row, 0).text()  # First Name
-            middle_initial = self.parent().student_table.item(self.row, 1).text()  # Middle Initial
-            last_name = self.parent().student_table.item(self.row, 2).text()  # Last Name
-            id_value = self.parent().student_table.item(self.row, 3).text()  # ID
-            year_level = self.parent().student_table.item(self.row, 4).text()  # Year Level
-            gender = self.parent().student_table.item(self.row, 5).text()  # Gender
-            course_code = self.parent().student_table.item(self.row, 6).text()  # Course Code
+            first_name = self.parent().student_table.item(self.row, 0).text()
+            middle_initial = self.parent().student_table.item(self.row, 1).text()
+            last_name = self.parent().student_table.item(self.row, 2).text()
+            id_value = self.parent().student_table.item(self.row, 3).text()
+            year_level = self.parent().student_table.item(self.row, 4).text()
+            gender = self.parent().student_table.item(self.row, 5).text()
+            course_code = self.parent().student_table.item(self.row, 6).text()
 
-            # Populate the dialog fields
             self.first_name_edit.setText(first_name)
             self.middle_initial_edit.setText(middle_initial)
             self.last_name_edit.setText(last_name)
             self.id_edit.setText(id_value)
-
-            # Disable editing for the ID field
             self.id_edit.setEnabled(False)
 
-            year_level_index = self.fields[0].findText(year_level)  # Year Level
-            if year_level_index != -1:
-                self.fields[0].setCurrentIndex(year_level_index)
-
-            gender_index = self.fields[1].findText(gender)  # Gender
-            if gender_index != -1:
-                self.fields[1].setCurrentIndex(gender_index)
-
-            course_index = self.fields[2].findText(course_code)  # Course Code
-            if course_index != -1:
-                self.fields[2].setCurrentIndex(course_index)
+            self.fields[0].setCurrentText(year_level)
+            self.fields[1].setCurrentText(gender)
+            self.fields[2].setCurrentText(course_code if course_code else 'None')
 
     def validate_student_data(self, student_data):
-        """Validate updated student data."""
         first_name, middle_initial, last_name, id_value, year_level, gender, course_code = student_data
 
-        # Check if required fields are not empty
         if not first_name or not middle_initial or not last_name:
             return False
-
-        # Validate first name format
-        if not self.validate_name_format(first_name):
+        if not self.validate_name_format(first_name) or not self.validate_name_format(last_name):
             return False
-
-        # Validate last name format
-        if not self.validate_name_format(last_name):
-            return False
-
-        # Validate middle initial format: One uppercase letter followed by a period
         if len(middle_initial) != 2 or not middle_initial[0].isupper() or middle_initial[1] != '.':
             return False
-
-        # Add more validation rules as needed...
-
         return True
 
     def validate_name_format(self, name):
-        """Validate name format: Each part starts with an uppercase letter followed by lowercase letters."""
         parts = name.split()
         for part in parts:
             if len(part) < 1 or not part[0].isupper() or not part[1:].islower():
@@ -376,57 +332,70 @@ class UpdateStudentDialog(QDialog):
         return True
 
     def submit_data(self):
-        """Submit updated student data."""
-        id_value = self.id_edit.text()  # Get ID from QLineEdit widget
         first_name = self.first_name_edit.text()
         middle_initial = self.middle_initial_edit.text()
         last_name = self.last_name_edit.text()
+        id_value = self.id_edit.text()
         year_level = self.fields[0].currentText()
         gender = self.fields[1].currentText()
         course_code = self.fields[2].currentText()
 
-        # Prepare updated student data in the correct order for CSV writing
-        updated_student_data = [first_name, middle_initial, last_name, id_value, year_level, gender, course_code]
+        # Convert "None" to None for database update
+        if course_code == 'None':
+            course_code = None
 
-        # Validate all updated student data
+        updated_student_data = (first_name, middle_initial, last_name, year_level, gender, course_code, id_value)
+
         if self.validate_student_data(updated_student_data):
             try:
-                connection = create_connection(HOST, USER, PASSWORD, DATABASE)
-                if connection:
-                    cursor = connection.cursor()
-                    # Update student data in the database
-                    update_query = """
-                        UPDATE students
-                        SET first_name = %s,
-                            middle_initial = %s,
-                            last_name = %s,
-                            year_level = %s,
-                            gender = %s,
-                            course_code = %s
-                        WHERE id = %s
-                    """
-                    cursor.execute(update_query, (first_name, middle_initial, last_name, year_level, gender, course_code, id_value))
-                    connection.commit()
-                    QMessageBox.information(self, "Success", "Student updated successfully.")
-                    self.accept()  # Close the dialog after successful update
+                print("Updating student with data:", updated_student_data)  # Debug print
+                self.connection.ping(reconnect=True)
+                self.cursor.execute("""
+                    UPDATE students
+                    SET first_name = %s, middle_initial = %s, last_name = %s,
+                        year_level = %s, gender = %s, course_code = %s
+                    WHERE id_value = %s
+                """, updated_student_data)
+                self.connection.commit()
+                print("Student updated successfully!")  # Debug print
 
-                    # Restore the scroll position after closing the dialog
-                    if self.parent() and hasattr(self.parent(), 'student_table'):
-                        self.parent().student_table.verticalScrollBar().setValue(self.original_scroll_position)
-            except Error as e:
-                QMessageBox.warning(self, "Error", f"Error occurred: {str(e)}")
-            finally:
-                if connection and connection.is_connected():
-                    cursor.close()
-                    connection.close()
+                # Verify the database state immediately after the update
+                self.cursor.execute("SELECT course_code FROM students WHERE id_value = %s", (id_value,))
+                result = self.cursor.fetchone()
+                print("Database state after update:", result)  # Debug print
+
+                if result and result[0] == course_code:
+                    self.parent().load_student_data()  # Refresh student data in the main window
+                    self.accept()
+                else:
+                    QMessageBox.critical(self, "Error", "Failed to update student: Course code did not match expected value.")
+            except mysql.connector.Error as e:
+                print("Error while updating student:", str(e))  # Debug print
+                # Suppress specific foreign key constraint error message
+                if e.errno == mysql.connector.errorcode.ER_ROW_IS_REFERENCED_2 or e.errno == mysql.connector.errorcode.ER_NO_REFERENCED_ROW_2:
+                    print("Suppressed error message: Foreign key constraint issue.")
+                else:
+                    QMessageBox.critical(self, "Error", f"Failed to update student: {str(e)}")
         else:
-            QMessageBox.warning(self, "Error", "Please enter valid data.")
+            QMessageBox.warning(self, "Invalid Input", "Please fill in all required fields and ensure proper format.")
+
+    def get_updated_student_data(self):
+        first_name = self.first_name_edit.text()
+        middle_initial = self.middle_initial_edit.text()
+        last_name = self.last_name_edit.text()
+        id_value = self.id_edit.text()
+        year_level = self.fields[0].currentText()
+        gender = self.fields[1].currentText()
+        course_code = self.fields[2].currentText()
+        return first_name, middle_initial, last_name, id_value, year_level, gender, course_code
 
 class UpdateCourseDialog(QDialog):
-    def __init__(self, parent=None, row=None):
+    def __init__(self, parent=None, row=None, connection=None):
         super().__init__(parent)
         self.setWindowTitle("Update Course")
         self.setGeometry(200, 200, 400, 200)
+        self.connection = connection  # Initialize connection
+        self.cursor = connection.cursor()  # Initialize cursor
 
         self.row = row
 
@@ -452,31 +421,16 @@ class UpdateCourseDialog(QDialog):
 
         # Validate updated data
         if self.validate_course_data(updated_data):
-            try:
-                connection = create_connection(HOST, USER, PASSWORD, DATABASE)
-                if connection:
-                    cursor = connection.cursor()
-                    # Update course data in the database
-                    update_query = """
-                        UPDATE courses
-                        SET course_name = %s
-                        WHERE course_code = %s
-                    """
-                    cursor.execute(update_query, (updated_data[1], updated_data[0]))
-                    connection.commit()
-                    QMessageBox.information(self, "Success", "Course updated successfully.")
-                    self.parent().load_course_data()  # Reload data in main window
-                    self.close()
-            except Error as e:
-                QMessageBox.warning(self, "Error", f"Error occurred: {str(e)}")
-            finally:
-                if connection and connection.is_connected():
-                    cursor.close()
-                    connection.close()
+            self.updated_course_data = updated_data  # Store updated data
+            self.accept()
         else:
             QMessageBox.warning(self, "Error", "Please enter valid data.")
 
     def validate_course_data(self, course_data):
-        """Validate updated course data."""
+        """Validate course data."""
         # You can add your validation logic here
         return True
+
+    def get_updated_course_data(self):
+        """Return the updated course data."""
+        return self.updated_course_data
